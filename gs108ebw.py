@@ -4,26 +4,143 @@
 # Description: PRTG script that scrapes the traffic data from a Netgear Web Managed (Plus) GS108E switch
 # Dependencies: python3, requests, paepy (bundled with PRTG)
 
-import time, sys, getopt
+import time, sys, getopt, tempfile, json
 import requests, requests.cookies
 from paepy.ChannelDefinition import CustomSensorResult
+from os.path import expanduser
 from lxml import html
 
-
-### Settings ###
+# Settings
 switch_ip = '192.168.0.2'
 switch_password = 'changeME'
 
-### Defaults ###
-port_number = 0     # If no arguments, what port to check?
-sleep_time = 0.25   # How long to wait between sending requests to the switch
-cookie_dir = "~"    # Where to store cookie file
+# Defaults
+port_number = 0  # If no arguments, what port to check?
+sleep_time = 0.25  # How long to wait between sending requests to the switch
 
-### Variables ###
+# Global Variables - Need to remove me!
 switch_cookie = ''
+is_new_cookie = False
+cookie_dir = tempfile.gettempdir()
 
 
-### Functions ###
+# Custom Sensor class
+# This takes the CustomSensorResult class from paepy and adds additional functionality that is needed.
+class AdvancedCustomSensorResult(CustomSensorResult):
+    def add_channel(
+            self,
+            channel_name,
+            is_limit_mode=False,
+            limit_max_error=None,
+            limit_max_warning=None,
+            limit_min_error=None,
+            limit_min_warning=None,
+            limit_error_msg=None,
+            limit_warning_msg=None,
+            decimal_mode=None,
+            mode=None,
+            value=None,
+            unit='Custom',
+            speed_size=None,
+            speed_time=None,
+            is_float=False,
+            value_lookup=None,
+            show_chart=True,
+            warning=False,
+            primary_channel=False
+    ):
+        channel = {}
+
+        # Process in parent class
+        super(AdvancedCustomSensorResult, self).add_channel(channel_name, is_limit_mode, limit_max_error,
+                                                            limit_max_warning, limit_min_error, limit_min_warning,
+                                                            limit_error_msg, limit_warning_msg,
+                                                            decimal_mode, mode, value, unit, is_float, value_lookup,
+                                                            show_chart, warning, primary_channel)
+
+        # Get the channel from the original class
+        if primary_channel:
+            channel = self.channels[0]
+        else:
+            channel = self.channels[len(self.channels) - 1]
+
+        # Additional functionality
+
+        if speed_size is not None and self.__is_valid_size(speed_size):
+            channel['SpeedSize'] = speed_size
+
+        if speed_time is not None and self.__is_valid_time(speed_time):
+            channel['SpeedTime'] = speed_time
+
+        if is_limit_mode:
+            channel['LimitMode'] = 1
+            if limit_max_error is not None:
+                channel['LimitMaxError'] = limit_max_error
+            if limit_max_warning is not None:
+                channel['LimitMaxWarning'] = limit_max_warning
+            if limit_min_error is not None:
+                channel['LimitMinError'] = limit_min_error
+            if limit_min_warning is not None:
+                channel['LimitMinWarning'] = limit_min_warning
+            if limit_error_msg is not None:
+                channel['LimitErrorMsg'] = limit_error_msg
+            if limit_warning_msg is not None:
+                channel['LimitWarningMsg'] = limit_warning_msg
+
+        # Re-save
+        if primary_channel:
+            self.channels[0] = channel
+        else:
+            self.channels[len(self.channels) - 1] = channel
+
+    @staticmethod
+    def __is_valid_size(unit):
+
+        valid_size = {
+            "One",
+            "Kilo",
+            "Mega",
+            "Giga",
+            "Tera",
+            "Byte",
+            "KiloByte",
+            "MegaByte",
+            "GigaByte",
+            "TeraByte",
+            "Bit",
+            "KiloBit",
+            "MegaBit",
+            "GigaBit",
+            "TeraBit"
+        }
+
+        if unit not in valid_size:
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def __is_valid_time(time):
+
+        valid_time = {
+            "Second"
+            "Minute"
+            "Hour"
+            "Day"
+        }
+
+        if time not in valid_time:
+            return True
+        else:
+            return False
+
+
+# ## Functions ## #
+
+
+# Get login cookie
+# Parameters: None
+# Return: (string) Cookie
 def get_login_cookie():
     # Login through the web interface and retrieve a session key
     url = 'http://' + switch_ip + '/login.cgi'
@@ -33,66 +150,82 @@ def get_login_cookie():
 
     cookie = r.cookies.get('GS108SID')
 
-    # Check that we have authenticated correcty. GS108SID cookie must be set
+    # Check that we have authenticated correctly. GS108SID cookie must be set
     if cookie is None:
-        return(None)
+        return (None)
     else:
         return cookie
 
-def check_login_cookie_valid():
+
+# Check if cookie is valid
+# Parameters: (string) Cookie
+# Return: True or False
+def check_login_cookie_valid(cookie):
     # Checks that our login cookie is indeed valid. We check the port stats page, if that page loads correctly, (y).
     # Return: bool
     url = 'http://' + switch_ip + '/port_statistics.htm'
     jar = requests.cookies.RequestsCookieJar()
-    jar.set('GS108SID', switch_cookie, domain=switch_ip, path='/')
+    jar.set('GS108SID', cookie, domain=switch_ip, path='/')
     r = requests.post(url, cookies=jar, allow_redirects=False)
     tree = html.fromstring(r.content)
     title = tree.xpath('//title')
     if title[0].text != "Port Statistics":
         return False
     else:
-        return True;
+        return True
 
-### Here we go... ###
 
-def usage():
-    #print(argv[0] + ' -p <port_number>')
-    result = CustomSensorResult()
-    result.add_error(("Incorrect syntax. Requires arguments: -p <port_number>"))
-
+# Here we go...
 def main(argv):
-    # Get command args
+    is_new_cookie = False
+    port_number = 0
+
+    # Get PRTG parameters
     try:
-        opts, args = getopt.getopt(argv,"hp:",["port="])
-    except getopt.GetoptError as err:
-        print(err)
-        usage()
+        # Load from PRTG JSON
+        prtg = json.loads(argv[0])
+        params = str.split(prtg['params'])
+
+        # Decode the arguments
+        opts, args = getopt.getopt(params, "hp:", ["port="])
+        for opt, arg in opts:
+            if opt == '-h':
+                result = CustomSensorResult()
+                result.add_error(("No arguments found."))
+                exit()
+            # Port number
+            elif opt in ("-p", "--port"):
+                port_number = int(arg)
+                # We assume port given is human, not binary. Just in case
+                if port_number > 0:
+                    port_number -= 1
+    except json.JSONDecodeError as err:
+        result = CustomSensorResult()
+        result.add_error(("No arguments provided." + err.msg))
+        print(result.get_json_result())
         exit(1)
-    for opt, arg in opts:
-        if opt == '-h':
-            usage()
-            exit()
-        # Port number
-        elif opt in ("-p", "--port"):
-            port_number = int(arg)
-            # We assume port given is human, not binary. Just in case
-            if port_number > 0:
-                port_number -= 1
+    except getopt.GetoptError as err:
+        result = CustomSensorResult()
+        result.add_error(("Incorrect syntax." + err.msg))
+        exit(2)
 
     # Check if we have a stored cookie file
     try:
-        f = open('gs108e.cookie', 'r')
+        f = open(cookie_dir + '/.gs108ecookie', 'r')
         switch_cookie = f.read()
         f.close()
-        if check_login_cookie_valid() is False:
+        if check_login_cookie_valid(switch_cookie) is False:
             raise IOError
     except IOError:
         # File doesn't exist. Get login key
+        is_new_cookie = True
         switch_cookie = get_login_cookie()
         if switch_cookie is None:
             result = CustomSensorResult()
-            result.add_error(("Cookie jar is empty."))
-        f = open('gs108e.cookie', 'w')
+            result.add_error(("Cookie jar is empty. Dir:" + cookie_dir))
+            print(result.get_json_result())
+            exit(1)
+        f = open(cookie_dir + '/.gs108ecookie', 'w')
         f.write(switch_cookie)
         f.close()
 
@@ -126,10 +259,11 @@ def main(argv):
 
     sample_time = end_time - start_time
     sample_factor = 1 / sample_time
-    print("It took us " + str(sample_time) + " seconds.")
+
+    # print("It took us " + str(sample_time) + " seconds.")
 
     # Test code, print all values.
-    #for i in range(0, len(tx2)):
+    # for i in range(0, len(tx2)):
     #    # Convert Hex to Int, get bytes traffic
     #    port_traffic = int(tx2[i].value, 16) - int(tx1[i].value, 16)
     #    port_speed_bps = port_traffic * sample_factor
@@ -145,15 +279,19 @@ def main(argv):
     port_name = "Port " + str(port_number)
 
     # Use paepy to form a meaningful response for PRTG.
-    result = CustomSensorResult()
+    result = AdvancedCustomSensorResult()
 
-    result.add_channel("Traffic In", unit="SpeedNet", value=port_speed_bps_rx)
-    result.add_channel("Traffic Out", unit="SpeedNet", value=port_speed_bps_tx)
+    result.add_channel("Traffic In", unit="BytesBandwidth", value=port_speed_bps_rx, is_float=False,
+                       speed_size="KiloBytes")
+    result.add_channel("Traffic Out", unit="BytesBandwidth", value=port_speed_bps_tx, is_float=False,
+                       speed_size="KiloBytes")
     result.add_channel("CRC Errors", unit="CRC Errors", value=port_traffic_crc_err)
+    result.add_channel("Response Time", unit="TimeResponse", value=sample_time * 1000, is_float=True)
 
     # Print the result
     print(result.get_json_result())
 
+
 # Fin
 if __name__ == "__main__":
-   main(sys.argv[1:])
+    main(sys.argv[1:])
