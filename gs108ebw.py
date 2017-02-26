@@ -3,25 +3,16 @@
 # Author: Matt Ribbins (mattyribbo.co.uk)
 # Description: PRTG script that scrapes the traffic data from a Netgear Web Managed (Plus) GS108E switch
 # Dependencies: python3, requests, paepy (bundled with PRTG)
+# Usage: ./gs108ebw.py -i <ip address> -p <password> -n <port number>
 
 import time, sys, getopt, tempfile, json
 import requests, requests.cookies
 from paepy.ChannelDefinition import CustomSensorResult
-from os.path import expanduser
 from lxml import html
 
-# Settings
-switch_ip = '192.168.0.2'
-switch_password = 'changeME'
-
-# Defaults
-port_number = 0  # If no arguments, what port to check?
+# Script Defaults
 sleep_time = 0.25  # How long to wait between sending requests to the switch
-
-# Global Variables - Need to remove me!
-switch_cookie = ''
-is_new_cookie = False
-cookie_dir = tempfile.gettempdir()
+cookie_dir = tempfile.gettempdir() # Where to store script files. Default OS temp dir
 
 
 # Custom Sensor class
@@ -141,7 +132,7 @@ class AdvancedCustomSensorResult(CustomSensorResult):
 # Get login cookie
 # Parameters: None
 # Return: (string) Cookie
-def get_login_cookie():
+def get_login_cookie(switch_ip, switch_password):
     # Login through the web interface and retrieve a session key
     url = 'http://' + switch_ip + '/login.cgi'
     data = dict(password=switch_password)
@@ -160,7 +151,7 @@ def get_login_cookie():
 # Check if cookie is valid
 # Parameters: (string) Cookie
 # Return: True or False
-def check_login_cookie_valid(cookie):
+def check_login_cookie_valid(switch_ip, cookie):
     # Checks that our login cookie is indeed valid. We check the port stats page, if that page loads correctly, (y).
     # Return: bool
     url = 'http://' + switch_ip + '/port_statistics.htm'
@@ -178,6 +169,9 @@ def check_login_cookie_valid(cookie):
 # Here we go...
 def main(argv):
     is_new_cookie = False
+    switch_ip = "192.168.0.2"
+    switch_password = "notSetOne"
+    switch_cookie = ""
     port_number = 0
 
     # Get PRTG parameters
@@ -187,18 +181,22 @@ def main(argv):
         params = str.split(prtg['params'])
 
         # Decode the arguments
-        opts, args = getopt.getopt(params, "hp:", ["port="])
+        opts, args = getopt.getopt(params, "hi:p:n:", ["port=", "ip=", "password=",])
         for opt, arg in opts:
             if opt == '-h':
                 result = CustomSensorResult()
                 result.add_error(("No arguments found."))
                 exit()
             # Port number
-            elif opt in ("-p", "--port"):
+            elif opt in ("-n", "--port"):
                 port_number = int(arg)
                 # We assume port given is human, not binary. Just in case
                 if port_number > 0:
                     port_number -= 1
+            elif opt in ("-p", "--password"):
+                switch_password = str(arg)
+            elif opt in ("-i", "--ip"):
+                switch_ip = str(arg)
     except json.JSONDecodeError as err:
         result = CustomSensorResult()
         result.add_error(("No arguments provided." + err.msg))
@@ -214,12 +212,12 @@ def main(argv):
         f = open(cookie_dir + '/.gs108ecookie', 'r')
         switch_cookie = f.read()
         f.close()
-        if check_login_cookie_valid(switch_cookie) is False:
+        if check_login_cookie_valid(switch_ip, switch_cookie) is False:
             raise IOError
     except IOError:
         # File doesn't exist. Get login key
         is_new_cookie = True
-        switch_cookie = get_login_cookie()
+        switch_cookie = get_login_cookie(switch_ip, switch_password)
         if switch_cookie is None:
             result = CustomSensorResult()
             result.add_error(("Cookie jar is empty. Dir:" + cookie_dir))

@@ -15,7 +15,7 @@ gs108ebw requires a few dependencies:
 ### Screenshots
 
 When a sensor is configured, you will get the following information in PRTG.
-![GS108E sensor displaying all available channels](https://mattyribbo.co.uk/wp-content/uploads/2017/02/Screen-Shot-2017-02-07-at-21.09.15.png)
+![GS108E sensor displaying all available channels](//mattyribbo.co.uk/wp-content/uploads/2017/02/Screen-Shot-2017-02-07-at-21.09.15.png)
 
 
 ### Installation
@@ -44,6 +44,7 @@ C:\Program Files (x86)\PRTG Network Monitor\Custom Sensors\python
 ```
 ### Usage
 Once the script is installed on the PRTG server, open up the web console and navigate to the device where you want to log traffic.
+Add a custom Python sensor, select the python script, and use the following parameters: -i \<ip address\> -p \<password\> -n \<port number\>
 
 ### Limitations
 
@@ -53,9 +54,7 @@ Once the script is installed on the PRTG server, open up the web console and nav
 
 ### Todos
  - Caching data to reduce the amount of calls made to the switch.
- - More command line parameters instead of hard coded values.
  - Built in functionality to ignore false values.
- - Remove the global variable nightmare!
  - Code clean-up. Perhaps make it into a class...
 
 ### License
