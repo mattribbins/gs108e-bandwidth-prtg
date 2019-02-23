@@ -1,8 +1,21 @@
-# GS108E Bandwidth Sensor for PRTG (gs108ebw.py)
+# Netgear ProSAFE GS1xxE Bandwidth Sensor for PRTG (gs108ebw.py)
 
-This PRTG python script provides a custom sensor for PRTG, allowing you to monitor traffic consumption on your Netgear GS108E switch (and other related models).
+This PRTG python script provides a custom sensor for PRTG, allowing you to monitor traffic consumption on your Netgear GS10xE switch (GS108E, GS105E and other related managed models).
 
 This script came into existance as the web interface only provided traffic counters and no current traffic loads. There is no SNMP functionality on the switch either. A custom sensor is required to be able to display this information on PRTG.
+### Compatibilty
+gs108ebw has been confirmed working on the following devices:
+* GS108Ev3, Firmware V2.06.03
+* GS105Ev2, Firmware V1.5.0.5
+
+In theory, this script will also work with the following devices: 
+GS105PE, 
+GS108PE, 
+GS116Ev2, 
+JGS516PE, 
+JGS524Ev2, 
+JGS524PE, 
+GS750E
 
 ### Requirements
 

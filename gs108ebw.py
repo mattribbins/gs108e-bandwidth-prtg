@@ -1,7 +1,8 @@
-# GS108E Bandwith PRTG Monitor
+# Netgear ProSAFE GS1xxE Bandwith PRTG Monitor
 #
+# Version: 1.1
 # Author: Matt Ribbins (mattyribbo.co.uk)
-# Description: PRTG script that scrapes the traffic data from a Netgear Web Managed (Plus) GS108E switch
+# Description: PRTG script that scrapes the traffic data from a Netgear ProSAFE Web Managed (Plus) switch
 # Dependencies: python3, requests, paepy (bundled with PRTG)
 # Usage: ./gs108ebw.py -i <ip address> -p <password> -n <port number>
 
@@ -130,8 +131,8 @@ class AdvancedCustomSensorResult(CustomSensorResult):
 
 
 # Get login cookie
-# Parameters: None
-# Return: (string) Cookie
+# Parameters: (string) Switch IP, (strong) Switch Password
+# Return: (string) Cookie name, (string) Cookie content
 def get_login_cookie(switch_ip, switch_password):
     # Login through the web interface and retrieve a session key
     url = 'http://' + switch_ip + '/login.cgi'
@@ -139,24 +140,28 @@ def get_login_cookie(switch_ip, switch_password):
 
     r = requests.post(url, data=data, allow_redirects=True)
 
+    # Check that we have authenticated correctly. Cookie must be set
     cookie = r.cookies.get('GS108SID')
+    if cookie is not None:
+        return 'GS108SID', cookie
 
-    # Check that we have authenticated correctly. GS108SID cookie must be set
-    if cookie is None:
-        return (None)
-    else:
-        return cookie
+    cookie = r.cookies.get('SID')
+    if cookie is not None:
+        return 'SID', cookie
+
+    # If we've got here, then authentication error or cannot find the auth cookie.
+    return (None), (None)
 
 
 # Check if cookie is valid
-# Parameters: (string) Cookie
+# Parameters: (string) Switch IP, (string) Cookie name, (string) Cookie contents
 # Return: True or False
-def check_login_cookie_valid(switch_ip, cookie):
+def check_login_cookie_valid(switch_ip, cookie_name, cookie_content):
     # Checks that our login cookie is indeed valid. We check the port stats page, if that page loads correctly, (y).
     # Return: bool
-    url = 'http://' + switch_ip + '/port_statistics.htm'
+    url = 'http://' + switch_ip + '/portStatistics.cgi'
     jar = requests.cookies.RequestsCookieJar()
-    jar.set('GS108SID', cookie, domain=switch_ip, path='/')
+    jar.set(cookie_name, cookie_content, domain=switch_ip, path='/')
     r = requests.post(url, cookies=jar, allow_redirects=False)
     tree = html.fromstring(r.content)
     title = tree.xpath('//title')
@@ -209,38 +214,48 @@ def main(argv):
 
     # Check if we have a stored cookie file
     try:
-        f = open(cookie_dir + '/.gs108ecookie', 'r')
-        switch_cookie = f.read()
+        f = open(cookie_dir + '/.gs108ecookie' + switch_ip, 'r')
+        switch_cookie_name = f.readline().rstrip('\n')
+        switch_cookie_content = f.readline().rstrip('\n')
         f.close()
-        if check_login_cookie_valid(switch_ip, switch_cookie) is False:
+        if check_login_cookie_valid(switch_ip, switch_cookie_name, switch_cookie_content) is False:
             raise IOError
     except IOError:
         # File doesn't exist. Get login key
         is_new_cookie = True
-        switch_cookie = get_login_cookie(switch_ip, switch_password)
-        if switch_cookie is None:
+        switch_cookie_name, switch_cookie_content = get_login_cookie(switch_ip, switch_password)
+        if switch_cookie_name is None:
             result = CustomSensorResult()
             result.add_error(("Cookie jar is empty. Dir:" + cookie_dir))
             print(result.get_json_result())
             exit(1)
-        f = open(cookie_dir + '/.gs108ecookie', 'w')
-        f.write(switch_cookie)
+        f = open(cookie_dir + '/.gs108ecookie' + switch_ip, 'w')
+        f.write(switch_cookie_name + "\n")
+        f.write(switch_cookie_content + "\n")
+        f.write(time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
         f.close()
 
     # Set up our cookie jar
     jar = requests.cookies.RequestsCookieJar()
-    jar.set('GS108SID', switch_cookie, domain=switch_ip, path='/')
+    jar.set(switch_cookie_name, switch_cookie_content, domain=switch_ip, path='/')
 
     # Get the port stats page
-    url = 'http://' + switch_ip + '/port_statistics.htm'
+    url = 'http://' + switch_ip + '/portStatistics.cgi'
     page = requests.get(url, cookies=jar)
     start_time = time.perf_counter()
     tree = html.fromstring(page.content)
 
     # Scrape the data
-    rx1 = tree.xpath('//tr[@class="portID"]/input[@name="rxPkt"]')
-    tx1 = tree.xpath('//tr[@class="portID"]/input[@name="txpkt"]')
-    crc1 = tree.xpath('//tr[@class="portID"]/input[@name="crcPkt"]')
+    if(switch_cookie_name == "SID"):
+        # GS105Ev2 format (no element names!)
+        rx1 = tree.xpath('//tr[@class="portID"]//input[@type="hidden"][2]')
+        tx1 = tree.xpath('//tr[@class="portID"]/input[@type="hidden"][4]')
+        crc1 = tree.xpath('//tr[@class="portID"]/input[@type="hidden"][6]')
+    else:
+        # GS108Ev3 format
+        rx1 = tree.xpath('//tr[@class="portID"]/input[@name="rxPkt"]')
+        tx1 = tree.xpath('//tr[@class="portID"]/input[@name="txpkt"]')
+        crc1 = tree.xpath('//tr[@class="portID"]/input[@name="crcPkt"]')
 
     # Hold fire
     time.sleep(sleep_time)
@@ -251,9 +266,16 @@ def main(argv):
     tree = html.fromstring(page.content)
 
     # Scrape the data
-    rx2 = tree.xpath('//tr[@class="portID"]/input[@name="rxPkt"]')
-    tx2 = tree.xpath('//tr[@class="portID"]/input[@name="txpkt"]')
-    crc2 = tree.xpath('//tr[@class="portID"]/input[@name="crcPkt"]')
+    if(switch_cookie_name == "SID"):
+        # GS105Ev2 format (no element names!)
+        rx2 = tree.xpath('//tr[@class="portID"]//input[@type="hidden"][2]')
+        tx2 = tree.xpath('//tr[@class="portID"]/input[@type="hidden"][4]')
+        crc2 = tree.xpath('//tr[@class="portID"]/input[@type="hidden"][6]')
+    else:
+        # GS108Ev3 format
+        rx2 = tree.xpath('//tr[@class="portID"]/input[@name="rxPkt"]')
+        tx2 = tree.xpath('//tr[@class="portID"]/input[@name="txpkt"]')
+        crc2 = tree.xpath('//tr[@class="portID"]/input[@name="crcPkt"]')
 
     sample_time = end_time - start_time
     sample_factor = 1 / sample_time
@@ -268,13 +290,24 @@ def main(argv):
     #    print("Port " + str(i) + ": " + "{0:.2f}".format(port_speed_bps/1024, ) + "kbps.")
 
 
-    # Convert Hex to Int, get bytes traffic
-    port_traffic_rx = int(rx2[port_number].value, 16) - int(rx1[port_number].value, 16)
-    port_traffic_tx = int(tx2[port_number].value, 16) - int(tx1[port_number].value, 16)
-    port_traffic_crc_err = int(crc2[port_number].value, 16) - int(crc2[port_number].value, 16)
-    port_speed_bps_rx = port_traffic_rx * sample_factor
-    port_speed_bps_tx = port_traffic_tx * sample_factor
-    port_name = "Port " + str(port_number)
+    if(switch_cookie_name == "SID"):
+        # GS105Ev2
+        # Values are already in Int
+        port_traffic_rx = int(rx2[port_number].value, 10) - int(rx1[port_number].value, 10)
+        port_traffic_tx = int(tx2[port_number].value, 10) - int(tx1[port_number].value, 10)
+        port_traffic_crc_err = int(crc2[port_number].value, 10) - int(crc2[port_number].value, 10)
+        port_speed_bps_rx = port_traffic_rx * sample_factor
+        port_speed_bps_tx = port_traffic_tx * sample_factor
+        port_name = "Port " + str(port_number)
+    else:
+        # GS108Ev3 format
+        # Convert Hex to Int, get bytes traffic
+        port_traffic_rx = int(rx2[port_number].value, 16) - int(rx1[port_number].value, 16)
+        port_traffic_tx = int(tx2[port_number].value, 16) - int(tx1[port_number].value, 16)
+        port_traffic_crc_err = int(crc2[port_number].value, 16) - int(crc2[port_number].value, 16)
+        port_speed_bps_rx = port_traffic_rx * sample_factor
+        port_speed_bps_tx = port_traffic_tx * sample_factor
+        port_name = "Port " + str(port_number)
 
     # Use paepy to form a meaningful response for PRTG.
     result = AdvancedCustomSensorResult()
